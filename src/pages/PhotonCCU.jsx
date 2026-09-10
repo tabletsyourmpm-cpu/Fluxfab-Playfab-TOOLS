@@ -1,308 +1,234 @@
-import React, { useState, useRef, useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import Photon from "photon-realtime";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Zap, Clock, AlertTriangle, Radio } from "lucide-react";
-import ProgressDisplay from "@/components/ProgressDisplay";
+import { AlertTriangle, Link2, LogOut, Radio } from "lucide-react";
 import LogConsole from "@/components/LogConsole";
-import { useSessionOverride } from "@/lib/sessionOverride";
+import { generateCustomId, loginPlayFabDebugger } from "@/lib/playfabGenerator";
 
-// Photon uses a WebSocket handshake to establish a connection.
-// We simulate a CCU entry by opening a WebSocket to the Photon Name Server
-// and performing a Join Lobby request, which counts as a CCU on the dashboard.
-async function connectPhotonCCU(appId) {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      resolve({ success: false, error: "Connection timeout" });
-    }, 10000);
+const LBC = Photon.LoadBalancing.LoadBalancingClient;
+const SDK_STATE = LBC.State;
 
-    try {
-      // Photon Name Server WebSocket endpoint
-      const ws = new WebSocket(`wss://ns.photonengine.io/Photon?x-nsuuid=${appId}`);
-      
-      ws.onopen = () => {
-        // Send a minimal Photon authenticate request (ExitGames PhotonClient protocol)
-        // OpCode 230 = Authenticate, with AppId parameter (key 224)
-        const authenticate = buildPhotonAuthPacket(appId);
-        ws.send(authenticate);
-      };
-
-      ws.onmessage = () => {
-        clearTimeout(timeout);
-        // Got a response = we registered as a CCU
-        resolve({ success: true });
-        // Keep socket open for a moment to count as active CCU, then close
-        setTimeout(() => ws.close(), 3000);
-      };
-
-      ws.onerror = () => {
-        clearTimeout(timeout);
-        resolve({ success: false, error: "WebSocket error" });
-      };
-
-      ws.onclose = (e) => {
-        clearTimeout(timeout);
-        if (e.code === 1006 || e.code === 1000) {
-          // Normal or abnormal closure - treat as success if we sent the packet
-          resolve({ success: true });
-        }
-      };
-    } catch (e) {
-      clearTimeout(timeout);
-      resolve({ success: false, error: e.message });
-    }
-  });
-}
-
-// Build a minimal Photon binary protocol authenticate packet
-function buildPhotonAuthPacket(appId) {
-  // Photon binary protocol: init request header
-  // This is the minimal packet to register with the Name Server
-  const appIdBytes = new TextEncoder().encode(appId);
-  const buf = new Uint8Array([
-    0xF3, 0x02, // Init Request
-    0x00, 0x00, // ReliableSequenceNumber
-    ...appIdBytes
-  ]);
-  return buf.buffer;
+function describePayload(payload) {
+  try {
+    return JSON.stringify(payload).slice(0, 500);
+  } catch {
+    return "[unserializable payload]";
+  }
 }
 
 export default function PhotonCCU() {
-  const [appId, setAppId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [isRunning, setIsRunning] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [successCount, setSuccessCount] = useState(0);
-  const [failCount, setFailCount] = useState(0);
+  const [version, setVersion] = useState("live1.1.1.43");
+  const [realtimeId, setRealtimeId] = useState("");
+  const [titleId, setTitleId] = useState("");
+  const [roomCode, setRoomCode] = useState("");
+  const [displayName, setDisplayName] = useState("Debugger Instance");
+  const [region, setRegion] = useState("US");
+  const [createPrivate, setCreatePrivate] = useState(false);
+  const [status, setStatus] = useState("DISCONNECTED");
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [logs, setLogs] = useState([]);
-  const [cooldown, setCooldown] = useState(0);
-  const abortRef = useRef(false);
-  const cooldownRef = useRef(null);
-  const { isOwnerOverride } = useSessionOverride();
+  const clientRef = useRef(null);
+  const connectTimeoutRef = useRef(null);
+  const connectionStartedAtRef = useRef(0);
 
   const addLog = useCallback((message, type = "info") => {
-    setLogs((prev) => [...prev, { message, type, time: new Date() }]);
+    setLogs((current) => [...current, { message, type, time: new Date() }]);
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (cooldownRef.current) clearInterval(cooldownRef.current);
-    };
+  useEffect(() => () => {
+    if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+    clientRef.current?.disconnect();
   }, []);
 
-  const startCooldown = () => {
-    setCooldown(120);
-    cooldownRef.current = setInterval(() => {
-      setCooldown((prev) => {
-        if (prev <= 1) {
-          clearInterval(cooldownRef.current);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+  const disconnect = () => {
+    if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+    clientRef.current?.disconnect();
+    clientRef.current = null;
+    setStatus("DISCONNECTED");
+    addLog("Disconnected from Photon.", "warning");
   };
 
-  const handleStart = async () => {
-    const count = parseInt(amount);
-    if (!appId.trim()) {
-      addLog("Error: App ID is required", "error");
-      return;
-    }
-    if (!count || count < 1 || count > 500) {
-      addLog("Error: Amount must be between 1 and 500", "error");
+  const armConnectionTimeout = (client, phase) => {
+    if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+    connectTimeoutRef.current = setTimeout(() => {
+      const elapsed = Math.round(performance.now() - connectionStartedAtRef.current);
+      setStatus("TIMEOUT");
+      addLog(`Photon ${phase} timed out after ${elapsed}ms.`, "error");
+      addLog(`Diagnostics: online=${navigator.onLine}, WebSocket=${typeof WebSocket === "function"}, endpoint=${client.getNameServerAddress?.() || "unknown"}.`, "error");
+      client.disconnect();
+    }, 15000);
+  };
+
+  const connect = async () => {
+    if (!realtimeId.trim() || !version.trim() || !roomCode.trim() || !titleId.trim()) {
+      addLog("Realtime ID, version, room code, and PlayFab Title ID are required.", "error");
       return;
     }
 
-    abortRef.current = false;
-    setIsRunning(true);
-    setProgress(0);
-    setTotal(count);
-    setSuccessCount(0);
-    setFailCount(0);
+    disconnect();
     setLogs([]);
+    setStatus("CONNECTING");
+    setIsAuthenticating(true);
+    connectionStartedAtRef.current = performance.now();
+    addLog(`Starting Photon Realtime SDK for ${version.trim()} (${region}).`);
+    addLog(`Browser diagnostics: online=${navigator.onLine}, WebSocket=${typeof WebSocket === "function"}, protocol=WSS.`);
 
-    addLog(`Starting CCU fill for App ID: ${appId}`, "info");
-    addLog(`Target: ${count} connections`, "info");
-
-    let successes = 0;
-    let fails = 0;
-
-    // Run connections in batches of 10 concurrently
-    const batchSize = 10;
-    for (let i = 0; i < count; i += batchSize) {
-      if (abortRef.current) {
-        addLog("Process aborted by user", "warning");
-        break;
-      }
-
-      const batch = Math.min(batchSize, count - i);
-      const promises = Array.from({ length: batch }, (_, j) =>
-        connectPhotonCCU(appId.trim()).then((result) => ({ result, index: i + j + 1 }))
-      );
-
-      const results = await Promise.all(promises);
-
-      for (const { result, index } of results) {
-        if (result.success) {
-          successes++;
-          setSuccessCount(successes);
-          if (successes % 10 === 0 || successes <= 3) {
-            addLog(`Connection #${index} established → CCU +1`, "success");
-          }
-        } else {
-          fails++;
-          setFailCount(fails);
-          addLog(`Connection #${index} failed: ${result.error}`, "error");
-        }
-        setProgress(index);
-      }
-
-      if (i + batchSize < count) {
-        await new Promise((r) => setTimeout(r, 300));
-      }
+    let playFabAccount;
+    try {
+      playFabAccount = await loginPlayFabDebugger(titleId.trim(), generateCustomId());
+      addLog(`PlayFab debugger account ready: ${playFabAccount.playFabId}${playFabAccount.newlyCreated ? " (created)" : " (existing)"}.`, "success");
+    } catch (error) {
+      setIsAuthenticating(false);
+      setStatus("ERROR");
+      addLog(error.message, "error");
+      return;
     }
+    setIsAuthenticating(false);
+    const client = new LBC(
+      Photon.ConnectionProtocol.Wss,
+      realtimeId.trim(),
+      version.trim()
+    );
+    clientRef.current = client;
+    client.setLogLevel(Photon.LogLevel.DEBUG);
+    client.setUserId(playFabAccount.playFabId || displayName.trim() || "Debugger Instance");
+    addLog(`Photon endpoint: ${client.getNameServerAddress?.() || "unknown until SDK connect"}.`);
+    addLog(`Photon user ID: ${client.getUserId?.() || playFabAccount.playFabId}.`);
+    armConnectionTimeout(client, "Name Server connection");
 
-    addLog(`Completed: ${successes} connected, ${fails} failed`, successes > 0 ? "success" : "error");
-    setIsRunning(false);
-    startCooldown();
+    client.onStateChange = (state) => {
+      const stateName = LBC.StateToName(state);
+      const elapsed = Math.round(performance.now() - connectionStartedAtRef.current);
+      setStatus(stateName.toUpperCase());
+      addLog(`Photon state: ${stateName} at ${elapsed}ms.`);
+
+      if (state === SDK_STATE.ConnectedToNameServer) {
+        addLog("Name Server transport established; requesting the selected region master.", "success");
+        armConnectionTimeout(client, "region master connection");
+      }
+
+      if (state === SDK_STATE.Error || state === SDK_STATE.Disconnected) {
+        if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+      }
+
+      if (state === SDK_STATE.JoinedLobby) {
+        addLog(`${createPrivate ? "Creating or joining" : "Joining"} room ${roomCode.trim()}.`);
+        armConnectionTimeout(client, "room join");
+        client.joinRoom(
+          roomCode.trim(),
+          createPrivate ? { createIfNotExists: true } : {},
+          createPrivate ? { maxPlayers: 10 } : undefined
+        );
+      }
+
+      if (state === SDK_STATE.Joined && connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+    };
+
+    client.onOperationResponse = (operationCode, returnCode, debugMessage, parameters) => {
+      const detail = debugMessage ? ` message=${debugMessage}` : "";
+      addLog(`Photon operation response: op=${operationCode}, returnCode=${returnCode}.${detail}`, returnCode === 0 ? "info" : "error");
+      if (returnCode !== 0 && parameters) addLog(`Photon response parameters: ${describePayload(parameters)}`, "error");
+    };
+
+    client.onEvent = (eventCode, data) => {
+      addLog(`Photon event received: code=${eventCode}, payload=${describePayload(data)}.`);
+    };
+
+    client.onJoinRoom = () => {
+      setStatus("JOINED");
+      addLog(`Joined room ${roomCode.trim()} as ${displayName.trim() || "Debugger Instance"}.`, "success");
+    };
+
+    client.onError = (errorCode, errorMessage) => {
+      if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+      setStatus("ERROR");
+      addLog(`Photon error ${errorCode}: ${errorMessage || "Unknown error"}.`, "error");
+    };
+
+    Photon.setOnLoad(() => {
+      client.connectToRegionMaster(region.trim() || "US");
+    });
   };
 
-  const handleAbort = () => {
-    abortRef.current = true;
-  };
-
-  const formatCooldown = (seconds) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  };
-
-  const isDisabled = isRunning || (!isOwnerOverride && cooldown > 0);
+  const connected = Boolean(clientRef.current) && status !== "DISCONNECTED" && status !== "ERROR";
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col items-center px-4 py-8 md:py-16">
-      {/* Glow background */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-[-200px] left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-violet-500/5 rounded-full blur-[120px]" />
-        <div className="absolute bottom-[-200px] right-[-100px] w-[400px] h-[400px] bg-violet-500/3 rounded-full blur-[100px]" />
-      </div>
-
       <div className="relative z-10 w-full max-w-xl">
-        {/* Header */}
-        <div className="text-center mb-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-violet-500/20 bg-violet-500/5 text-violet-400 text-xs font-mono tracking-wider mb-4">
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center gap-2 px-3 py-1 border border-violet-500/20 bg-violet-500/5 text-violet-400 text-xs font-mono tracking-wider mb-4">
             <Radio className="w-3 h-3" />
-            PHOTON TOOL
+            PHOTON DEBUGGER
           </div>
-          <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
-            CCU <span className="text-violet-400">Filler</span>
-          </h1>
-          <p className="text-zinc-500 text-sm mt-2 font-mono">
-            Inflate Photon App CCU count instantly
+          <h1 className="text-3xl md:text-4xl font-bold tracking-tight">Lobby Connector</h1>
+          <p className="text-zinc-500 text-sm mt-2 font-mono">Official Photon Realtime JavaScript SDK</p>
+        </div>
+
+        <div className="bg-zinc-900/80 border border-zinc-800 p-6 md:p-8 space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Game Version</Label>
+              <Input value={version} onChange={(event) => setVersion(event.target.value)} placeholder="live1.1.1.43" disabled={connected} />
+            </div>
+            <div className="space-y-2">
+              <Label>Region</Label>
+              <Input value={region} onChange={(event) => setRegion(event.target.value.toUpperCase())} placeholder="US" disabled={connected} />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label>Photon Realtime App ID</Label>
+              <Input value={realtimeId} onChange={(event) => setRealtimeId(event.target.value)} placeholder="Realtime application ID" disabled={connected} />
+            </div>
+            <div className="space-y-2">
+              <Label>PlayFab Title ID</Label>
+              <Input value={titleId} onChange={(event) => setTitleId(event.target.value.toUpperCase())} placeholder="Title ID" disabled={connected} />
+            </div>
+            <div className="space-y-2">
+              <Label>Room Code</Label>
+              <Input value={roomCode} onChange={(event) => setRoomCode(event.target.value)} placeholder="Private room code" disabled={connected} />
+            </div>
+            <div className="space-y-2">
+              <Label>Debugger Name</Label>
+              <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Debugger Instance" disabled={connected} />
+            </div>
+          </div>
+
+          <label className="flex items-center gap-3 border border-zinc-800 p-3 text-xs font-mono text-zinc-400 cursor-pointer">
+            <input type="checkbox" checked={createPrivate} onChange={(event) => setCreatePrivate(event.target.checked)} disabled={connected} />
+            CREATE PRIVATE LOBBY IF MISSING
+          </label>
+
+          <div className="flex gap-3">
+            {!connected ? (
+              <Button onClick={connect} disabled={isAuthenticating} className="flex-1 h-11 bg-violet-500 hover:bg-violet-400 text-white font-bold tracking-wider">
+                <Link2 className="w-4 h-4" /> {isAuthenticating ? "CREATING PLAYFAB USER..." : "CONNECT AND JOIN"}
+              </Button>
+            ) : (
+              <Button onClick={disconnect} variant="destructive" className="flex-1 h-11">
+                <LogOut className="w-4 h-4" /> DISCONNECT
+              </Button>
+            )}
+          </div>
+
+          <div className="border border-zinc-800 bg-black/20 p-3 font-mono text-xs">
+            <span className="text-zinc-500">STATUS </span>
+            <span className="text-violet-400">{status}</span>
+          </div>
+          <p className="text-zinc-600 text-xs font-mono">
+            This test path only creates a PlayFab debugger account and attempts a Photon Realtime room join.
           </p>
         </div>
 
-        {/* Main Card */}
-        <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6 md:p-8 backdrop-blur-sm">
-          <div className="space-y-5">
-            {/* App ID Input */}
-            <div className="space-y-2">
-              <Label className="text-zinc-400 text-xs font-mono uppercase tracking-wider">
-                Photon App ID
-              </Label>
-              <Input
-                value={appId}
-                onChange={(e) => setAppId(e.target.value)}
-                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                disabled={isRunning}
-                className="bg-zinc-950 border-zinc-700 text-white font-mono placeholder:text-zinc-600 h-12 text-sm tracking-widest focus:border-violet-500/50 focus:ring-violet-500/20"
-              />
-            </div>
-
-            {/* Amount Input */}
-            <div className="space-y-2">
-              <Label className="text-zinc-400 text-xs font-mono uppercase tracking-wider">
-                Number of Connections
-              </Label>
-              <div className="relative">
-                <Input
-                  type="number"
-                  value={amount}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v === "" || (parseInt(v) >= 0 && parseInt(v) <= 500)) setAmount(v);
-                  }}
-                  placeholder="1 – 500"
-                  disabled={isRunning}
-                  min={1}
-                  max={500}
-                  className="bg-zinc-950 border-zinc-700 text-white font-mono placeholder:text-zinc-600 h-12 text-lg focus:border-violet-500/50 focus:ring-violet-500/20"
-                />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 text-xs font-mono">
-                  / 500
-                </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="pt-2">
-              {!isRunning ? (
-                <Button
-                  onClick={handleStart}
-                  disabled={isDisabled}
-                  className="w-full h-12 bg-violet-500 hover:bg-violet-400 text-white font-bold text-sm tracking-wider disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
-                >
-                  {cooldown > 0 && !isOwnerOverride ? (
-                    <span className="flex items-center gap-2">
-                      <Clock className="w-4 h-4" />
-                      COOLDOWN {formatCooldown(cooldown)}
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-2">
-                      <Zap className="w-4 h-4" />
-                      START FILLING
-                    </span>
-                  )}
-                </Button>
-              ) : (
-                <Button
-                  onClick={handleAbort}
-                  variant="destructive"
-                  className="w-full h-12 bg-red-600 hover:bg-red-500 font-bold text-sm tracking-wider"
-                >
-                  <AlertTriangle className="w-4 h-4 mr-2" />
-                  ABORT
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Progress */}
-        {(isRunning || progress > 0) && (
-          <div className="mt-6">
-            <ProgressDisplay
-              progress={progress}
-              total={total}
-              successCount={successCount}
-              failCount={failCount}
-              isRunning={isRunning}
-            />
-          </div>
-        )}
-
-        {/* Logs */}
         {logs.length > 0 && (
           <div className="mt-6">
             <LogConsole logs={logs} />
           </div>
         )}
 
-        {/* Footer */}
-        <div className="text-center mt-8 text-zinc-600 text-xs font-mono">
-          Max 500 connections per batch • 2 min cooldown between runs
+        <div className="mt-6 flex items-start gap-2 text-zinc-600 text-xs font-mono">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <span>Room join success is reported only by the SDK callback. No handcrafted Photon packets are used.</span>
         </div>
       </div>
     </div>

@@ -147,29 +147,3 @@ export async function createPlayFabAccount(titleId, customId, displayName = null
 
   return { success: false, error: "Max retries reached" };
 }
-
-export async function loginPlayFabDebugger(titleId, customId) {
-  const response = await fetch(`https://${titleId}.playfabapi.com/Client/LoginWithCustomID`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-PlayFabSDK": "WebSDK-1.0.0",
-    },
-    body: JSON.stringify({
-      TitleId: titleId,
-      CustomId: customId,
-      CreateAccount: true,
-    }),
-  });
-
-  const data = await response.json();
-  if (!response.ok || !data.data?.PlayFabId) {
-    throw new Error(data.errorMessage || "PlayFab debugger account login failed");
-  }
-
-  return {
-    playFabId: data.data.PlayFabId,
-    sessionTicket: data.data.SessionTicket,
-    newlyCreated: data.data.NewlyCreated,
-  };
-}
