@@ -5,7 +5,6 @@ import { Label } from "@/components/ui/label";
 import { Users, Zap, Clock, AlertTriangle, CheckCircle2, Loader2, Shield } from "lucide-react";
 import ProgressDisplay from "@/components/ProgressDisplay";
 import LogConsole from "@/components/LogConsole";
-import ExportButton from "@/components/ExportButton";
 import { generateCustomId, createPlayFabAccount } from "@/lib/playfabGenerator";
 
 export default function Home() {
@@ -131,10 +130,6 @@ export default function Home() {
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-[-200px] left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-emerald-500/5 rounded-full blur-[120px]" />
         <div className="absolute bottom-[-200px] right-[-100px] w-[400px] h-[400px] bg-emerald-500/3 rounded-full blur-[100px]" />
-      </div>
-
-      <div className="fixed top-4 right-4 z-20">
-        <ExportButton />
       </div>
 
       <div className="relative z-10 w-full max-w-xl">

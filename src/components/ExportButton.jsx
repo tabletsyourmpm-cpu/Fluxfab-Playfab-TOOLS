@@ -7,8 +7,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Download, FileArchive, Globe, Loader2 } from "lucide-react";
-import { useToast } from "@/components/ui/use-toast";
-import { appParams } from "@/lib/app-params";
+import { useToast } from "@/components/ui/usetoast";
 import { getProjectFiles } from "@/lib/projectFiles";
 import { createZip } from "@/lib/zip";
 import { buildStaticHtml } from "@/lib/staticExport";
@@ -31,41 +30,26 @@ export default function ExportButton() {
   const exportProject = async () => {
     setBusy(true);
     try {
-      // Try the platform's export endpoint first (full saved project)
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-      let res;
-      try {
-        res = await fetch(`/api/apps/${appParams.appId}/coding/export-to-zip`, {
-          credentials: "include",
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timeout);
-      }
-      const contentType = res.headers.get("content-type") || "";
-      if (res.ok && !contentType.includes("json") && !contentType.includes("html")) {
-        downloadBlob(await res.blob(), "playfab-account-generator-project.zip");
-        toast({ title: "Project exported", description: "Full project downloaded as a ZIP." });
-        return;
-      }
-      throw new Error("export endpoint unavailable");
-    } catch {
-      // Fallback: zip whatever project files can be fetched from the server
       const files = await getProjectFiles();
       if (files.length === 0) {
         toast({
           variant: "destructive",
           title: "Export unavailable",
-          description: "Use Code → 'Export project as ZIP' in the app editor to download the full project.",
+          description: "No project files are available from this static host.",
         });
         return;
       }
       const zip = createZip(files);
       downloadBlob(zip, "playfab-account-generator-project.zip");
       toast({
-        title: "Partial export",
-        description: "Downloaded the available config files. Use Code → 'Export project as ZIP' in the app editor for the full project.",
+        title: "Project exported",
+        description: "Downloaded the project files available from this static host.",
+      });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Export failed",
+        description: "Could not collect the project files from this static host.",
       });
     } finally {
       setBusy(false);

@@ -1,7 +1,4 @@
-// The project's own source can't be bundled into the client app, so the
-// fallback export fetches config files from the server at export time.
-
-// Best-effort list of project files that can be fetched from the server.
+// Best-effort list of project files available from the static host.
 const FETCH_CANDIDATES = [
   ".gitignore",
   "package.json",
