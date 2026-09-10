@@ -6,6 +6,7 @@ import { Users, Zap, Clock, AlertTriangle, CheckCircle2, Loader2, Shield } from 
 import ProgressDisplay from "@/components/ProgressDisplay";
 import LogConsole from "@/components/LogConsole";
 import { generateCustomId, createPlayFabAccount } from "@/lib/playfabGenerator";
+import { useSessionOverride } from "@/lib/sessionOverride";
 
 export default function Home() {
   const [titleId, setTitleId] = useState("");
@@ -20,6 +21,7 @@ export default function Home() {
   const [cooldown, setCooldown] = useState(0);
   const abortRef = useRef(false);
   const cooldownRef = useRef(null);
+  const { isOwnerOverride } = useSessionOverride();
 
   const addLog = useCallback((message, type = "info") => {
     setLogs((prev) => [...prev, { message, type, time: new Date() }]);
@@ -122,7 +124,7 @@ export default function Home() {
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
-  const isDisabled = isRunning || cooldown > 0;
+  const isDisabled = isRunning || (!isOwnerOverride && cooldown > 0);
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col items-center px-4 py-8 md:py-16">
@@ -216,7 +218,7 @@ export default function Home() {
                   disabled={isDisabled}
                   className="w-full h-12 bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm tracking-wider disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
                 >
-                  {cooldown > 0 ? (
+                  {cooldown > 0 && !isOwnerOverride ? (
                     <span className="flex items-center gap-2">
                       <Clock className="w-4 h-4" />
                       COOLDOWN {formatCooldown(cooldown)}

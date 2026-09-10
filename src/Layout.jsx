@@ -2,6 +2,30 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Shield, Database, Radio } from "lucide-react";
+import { useSessionOverride } from "@/lib/sessionOverride";
+
+function SiteOwnerControl() {
+  const { isOwnerOverride, setIsOwnerOverride } = useSessionOverride();
+
+  const unlockCooldown = (event) => {
+    event.preventDefault();
+    const code = window.prompt("SITE OWNER CODE");
+    if (code === "49_") setIsOwnerOverride(true);
+  };
+
+  return (
+    <button
+      type="button"
+      onPointerDown={unlockCooldown}
+      className="site-owner-control pointer-events-auto"
+      title="Site owner access"
+      aria-label="Open site owner access"
+      style={{ pointerEvents: "auto", zIndex: 9999 }}
+    >
+      {isOwnerOverride ? "OWNER ACTIVE" : "SITE OWNER"}
+    </button>
+  );
+}
 
 export default function Layout({ children, currentPageName }) {
   return (
@@ -9,14 +33,14 @@ export default function Layout({ children, currentPageName }) {
       <nav className="border-b border-zinc-800 bg-zinc-900/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-5xl mx-auto px-4 flex items-center gap-1 h-12">
           <div className="flex items-center gap-1.5 mr-4">
-            <div className="w-2 h-2 rounded-full bg-emerald-400" />
+            <div className="w-2 h-2 rounded-full bg-violet-400" />
             <span className="text-zinc-400 text-xs font-mono tracking-widest">PLAYFAB</span>
           </div>
           <Link
             to={createPageUrl("Home")}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono transition-colors ${
               currentPageName === "Home"
-                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                ? "bg-violet-500/10 text-violet-400 border border-violet-500/20"
                 : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
@@ -27,7 +51,7 @@ export default function Layout({ children, currentPageName }) {
             to={createPageUrl("TitleManager")}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono transition-colors ${
               currentPageName === "TitleManager"
-                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                ? "bg-violet-500/10 text-violet-400 border border-violet-500/20"
                 : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
@@ -48,6 +72,7 @@ export default function Layout({ children, currentPageName }) {
         </div>
       </nav>
       {children}
+      <SiteOwnerControl />
     </div>
   );
 }

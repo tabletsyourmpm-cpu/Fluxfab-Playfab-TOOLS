@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Zap, Clock, AlertTriangle, Radio } from "lucide-react";
 import ProgressDisplay from "@/components/ProgressDisplay";
 import LogConsole from "@/components/LogConsole";
+import { useSessionOverride } from "@/lib/sessionOverride";
 
 // Photon uses a WebSocket handshake to establish a connection.
 // We simulate a CCU entry by opening a WebSocket to the Photon Name Server
@@ -78,6 +79,7 @@ export default function PhotonCCU() {
   const [cooldown, setCooldown] = useState(0);
   const abortRef = useRef(false);
   const cooldownRef = useRef(null);
+  const { isOwnerOverride } = useSessionOverride();
 
   const addLog = useCallback((message, type = "info") => {
     setLogs((prev) => [...prev, { message, type, time: new Date() }]);
@@ -177,7 +179,7 @@ export default function PhotonCCU() {
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
-  const isDisabled = isRunning || cooldown > 0;
+  const isDisabled = isRunning || (!isOwnerOverride && cooldown > 0);
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col items-center px-4 py-8 md:py-16">
@@ -252,7 +254,7 @@ export default function PhotonCCU() {
                   disabled={isDisabled}
                   className="w-full h-12 bg-violet-500 hover:bg-violet-400 text-white font-bold text-sm tracking-wider disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
                 >
-                  {cooldown > 0 ? (
+                  {cooldown > 0 && !isOwnerOverride ? (
                     <span className="flex items-center gap-2">
                       <Clock className="w-4 h-4" />
                       COOLDOWN {formatCooldown(cooldown)}

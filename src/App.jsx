@@ -4,6 +4,7 @@ import { queryClientInstance } from '@/lib/query-client'
 import { pagesConfig } from './pages.config'
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
+import { SessionOverrideProvider } from '@/lib/sessionOverride';
 
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -40,12 +41,14 @@ const AppRoutes = () => {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClientInstance}>
-      <Router>
-        <AppRoutes />
-      </Router>
-      <Toaster />
-    </QueryClientProvider>
+    <SessionOverrideProvider>
+      <QueryClientProvider client={queryClientInstance}>
+        <Router>
+          <AppRoutes />
+        </Router>
+        <Toaster />
+      </QueryClientProvider>
+    </SessionOverrideProvider>
   )
 }
 

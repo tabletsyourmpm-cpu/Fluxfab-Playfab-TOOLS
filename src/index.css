@@ -97,7 +97,6 @@
   --muted: #a99daf;
   --dim: #756a7a;
   --purple: #b45cff;
-  --green: #63e6be;
   --yellow: #ffd166;
   --red: #ff6b8a;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
@@ -232,11 +231,45 @@ button[class*="bg-red"] {
 
 svg[class*="text-emerald"],
 [class*="text-emerald"] {
-  color: var(--green) !important;
+  color: var(--purple) !important;
 }
 
 [class*="text-violet"] {
   color: var(--purple) !important;
+}
+
+[class*="bg-emerald"],
+[class*="bg-violet"] {
+  background-color: rgba(180, 92, 255, 0.1) !important;
+}
+
+[class*="border-emerald"],
+[class*="border-violet"] {
+  border-color: var(--line-strong) !important;
+}
+
+.site-owner-control {
+  display: block !important;
+  pointer-events: auto !important;
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  padding: 6px 4px;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--dim) !important;
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.site-owner-control:hover,
+.site-owner-control:focus-visible {
+  color: var(--purple) !important;
+  outline: none;
 }
 
 h1,
